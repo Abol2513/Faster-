@@ -1,0 +1,54 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Detect Gradle version
+        id: gradle-ver
+        run: |
+          VER=""
+          if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
+            VER=$(grep -oE 'gradle-[0-9]+\.[0-9]+(\.[0-9]+)?' gradle/wrapper/gradle-wrapper.properties | head -n1 | sed 's/gradle-//')
+          fi
+          if [ -z "$VER" ] && [ -f gradle/libs.versions.toml ]; then
+            if grep -qE 'agp\s*=\s*"9\.' gradle/libs.versions.toml; then
+              VER="9.4.1"
+            else
+              VER="8.14"
+            fi
+          fi
+          echo "version=${VER:-8.14}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: ${{ steps.gradle-ver.outputs.version }}
+
+      - name: Build Debug APK
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug
+          else
+            gradle assembleDebug
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
