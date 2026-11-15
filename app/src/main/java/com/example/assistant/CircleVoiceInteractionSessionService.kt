@@ -3,6 +3,7 @@ package com.example.assistant
 import android.app.assist.AssistContent
 import android.app.assist.AssistStructure
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
@@ -12,6 +13,7 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
+import com.example.capture.ScreenCaptureRequestActivity
 import com.example.data.session.OverlaySessionStore
 import com.example.domain.model.CaptureSource
 import com.example.domain.model.OcrLine
@@ -36,16 +38,15 @@ class CircleVoiceInteractionSession(
 
     companion object {
         private const val TAG = "CircleAssistantSession"
-        private const val SCREENSHOT_WAIT_TIMEOUT_MS = 750L
+        private const val SCREENSHOT_WAIT_TIMEOUT_MS = 700L
     }
 
     private val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var fallbackJob: Job? = null
-    private var launchedOverlay = false
+    private var dispatched = false
     private var latestAssistLines: List<OcrLine> = emptyList()
 
     override fun onCreateContentView(): View {
-        // Return an invisible zero-intrusion view while awaiting onHandleScreenshot
         return View(serviceContext).apply {
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
         }
@@ -58,22 +59,15 @@ class CircleVoiceInteractionSession(
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
-        launchedOverlay = false
+        dispatched = false
         latestAssistLines = emptyList()
         fallbackJob?.cancel()
         fallbackJob = sessionScope.launch {
             delay(SCREENSHOT_WAIT_TIMEOUT_MS)
-            if (!launchedOverlay) {
-                launchOverlay(
-                    bitmap = null,
-                    assistLines = latestAssistLines,
-                    source = if (latestAssistLines.isNotEmpty()) {
-                        CaptureSource.ASSIST_TEXT_ONLY
-                    } else {
-                        CaptureSource.ASSISTANT_SCREENSHOT
-                    },
-                    isUnavailable = latestAssistLines.isEmpty()
-                )
+            if (!dispatched) {
+                // OEM (e.g., HyperOS) did not deliver onHandleScreenshot within window:
+                // Seamlessly fall back to MediaProjection capture flow.
+                launchMediaProjectionFallback()
             }
         }
     }
@@ -95,30 +89,18 @@ class CircleVoiceInteractionSession(
 
     override fun onHandleScreenshot(screenshot: Bitmap?) {
         super.onHandleScreenshot(screenshot)
-        if (launchedOverlay) return
+        if (dispatched) return
 
         val safeCopy = screenshot?.let { bmp ->
-            val targetConfig = Bitmap.Config.ARGB_8888
-            bmp.copy(targetConfig, false)
+            val copyConfig = Bitmap.Config.ARGB_8888
+            bmp.copy(copyConfig, false)
         }
 
         if (safeCopy != null) {
-            launchOverlay(
-                bitmap = safeCopy,
-                assistLines = latestAssistLines,
-                source = CaptureSource.ASSISTANT_SCREENSHOT,
-                isUnavailable = false
-            )
+            launchOverlayWithBitmap(safeCopy)
         } else {
-            // Screenshot null -> could be FLAG_SECURE or OEM restriction; wait briefly for AssistStructure or open fallback prompt
-            if (latestAssistLines.isNotEmpty()) {
-                launchOverlay(
-                    bitmap = null,
-                    assistLines = latestAssistLines,
-                    source = CaptureSource.ASSIST_TEXT_ONLY,
-                    isUnavailable = false
-                )
-            }
+            // OEM blocked assist screenshot or returned null -> seamlessly launch MediaProjection flow
+            launchMediaProjectionFallback()
         }
     }
 
@@ -144,24 +126,37 @@ class CircleVoiceInteractionSession(
         }
     }
 
-    private fun launchOverlay(
-        bitmap: Bitmap?,
-        assistLines: List<OcrLine>,
-        source: CaptureSource,
-        isUnavailable: Boolean
-    ) {
-        if (launchedOverlay) return
-        launchedOverlay = true
+    private fun launchOverlayWithBitmap(bitmap: Bitmap) {
+        if (dispatched) return
+        dispatched = true
         fallbackJob?.cancel()
 
         OverlaySessionStore.publish(
             bitmap = bitmap,
-            assistLines = assistLines,
-            source = source,
-            isProtectedOrUnavailable = isUnavailable
+            assistLines = latestAssistLines,
+            source = CaptureSource.ASSISTANT_SCREENSHOT,
+            isProtectedOrUnavailable = false
         )
+        startAssistantUi(OverlayActivity.createIntent(serviceContext))
+    }
 
-        val intent = OverlayActivity.createIntent(serviceContext)
+    private fun launchMediaProjectionFallback() {
+        if (dispatched) return
+        dispatched = true
+        fallbackJob?.cancel()
+
+        if (latestAssistLines.isNotEmpty()) {
+            OverlaySessionStore.setPendingAssistLines(latestAssistLines)
+        }
+        startAssistantUi(
+            ScreenCaptureRequestActivity.createIntent(
+                context = serviceContext,
+                fromQuickTile = false
+            )
+        )
+    }
+
+    private fun startAssistantUi(intent: Intent) {
         try {
             startAssistantActivity(intent)
         } catch (e: Exception) {

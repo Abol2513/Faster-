@@ -3,16 +3,19 @@ package com.example.ui.setup
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -26,7 +29,12 @@ import androidx.compose.material.icons.filled.Assistant
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Screenshot
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TouchApp
@@ -53,9 +61,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -74,18 +85,22 @@ fun SetupScreen(
     snackbarHostState: SnackbarHostState,
     onRequestAssistantRole: () -> Unit,
     onOpenAssistantSettings: () -> Unit,
+    onOpenXiaomiPopupPermissions: () -> Unit,
+    onOpenXiaomiAutostart: () -> Unit,
     onAddQuickTile: () -> Unit,
     onTestScreenCapture: () -> Unit,
     onPickTestPhoto: () -> Unit,
     onSelectTargetLanguage: (String) -> Unit,
     onToggleOcrLanguage: (String, Boolean) -> Unit,
     onToggleAutoTranslate: (Boolean) -> Unit,
+    onToggleAllowCellular: (Boolean) -> Unit,
     onDownloadOcr: (String) -> Unit,
     onDeleteOcr: (String) -> Unit,
     onDownloadTranslate: (String) -> Unit,
     onDeleteTranslate: (String) -> Unit
 ) {
     Scaffold(
+        contentWindowInsets = WindowInsets.safeDrawing,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
@@ -99,7 +114,7 @@ fun SetupScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .widthIn(max = 680.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 item {
@@ -112,9 +127,20 @@ fun SetupScreen(
                 }
 
                 item {
+                    XiaomiHyperOsHelperCard(
+                        isXiaomiDevice = state.isXiaomiDevice,
+                        onOpenXiaomiPopupPermissions = onOpenXiaomiPopupPermissions,
+                        onOpenXiaomiAutostart = onOpenXiaomiAutostart,
+                        onOpenAssistantSettings = onOpenAssistantSettings
+                    )
+                }
+
+                item {
                     QuickToolsCard(
                         autoTranslate = state.autoTranslateOnSelect,
+                        allowCellularDownloads = state.allowCellularDownloads,
                         onToggleAutoTranslate = onToggleAutoTranslate,
+                        onToggleAllowCellular = onToggleAllowCellular,
                         onTestScreenCapture = onTestScreenCapture,
                         onPickTestPhoto = onPickTestPhoto
                     )
@@ -179,10 +205,6 @@ fun SetupScreen(
                             }
                         )
                     }
-                }
-
-                item {
-                    Spacer(modifier = Modifier.height(16.dp))
                 }
             }
         }
@@ -294,7 +316,7 @@ private fun HeroAssistantCard(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "برای فعال‌سازی با نگهداشتن دکمه مرکزی Home (یا کشیدن از گوشه پایین صفحه)، کافی است یک بار برنامه را به‌عنوان دستیار پیش‌فرض اندروید انتخاب کنید. در حالت عادی برنامه کاملاً نامرئی است.",
+                    text = "برای فعال‌سازی با نگهداشتن دکمه مرکزی Home (یا کشیدن از گوشه پایین صفحه)، برنامه را به‌عنوان دستیار دیجیتال پیش‌فرض اندروید تنظیم کنید. در حالت عادی هیچ آیکون یا دکمه شناوری نمایش داده نمی‌شود.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -383,7 +405,7 @@ private fun HeroAssistantCard(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "نکته سیستمی اندروید: در برخی گوشی‌ها ممکن است برای اسکرین‌شات خودکار دستیار نیاز به فعال بودن گزینه «استفاده از اسکرین‌شات» در تنظیمات دستیار سیستم باشد؛ در غیر این صورت کاشی تنظیمات سریع همیشه با MediaProjection تصویر صفحه را می‌گیرد.",
+                            text = "اگر گوشی شما دریافت اسکرین‌شات مستقیم دستیار را مسدود کند، هنگام نگهداشتن دکمه Home یا لمس کاشی تنظیمات سریع، ثبت صفحه به‌صورت خودکار با MediaProjection انجام می‌شود.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSecondaryContainer
                         )
@@ -395,9 +417,140 @@ private fun HeroAssistantCard(
 }
 
 @Composable
+private fun XiaomiHyperOsHelperCard(
+    isXiaomiDevice: Boolean,
+    onOpenXiaomiPopupPermissions: () -> Unit,
+    onOpenXiaomiAutostart: () -> Unit,
+    onOpenAssistantSettings: () -> Unit
+) {
+    var expanded by rememberSaveable(isXiaomiDevice) { mutableStateOf(isXiaomiDevice) }
+
+    ElevatedCard(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (isXiaomiDevice) {
+                MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            }
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .testTag("xiaomi_helper_toggle"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PhoneAndroid,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Column {
+                        Text(
+                            text = if (isXiaomiDevice) {
+                                "راهنمای تنظیمات Xiaomi HyperOS / MIUI (پیشنهادی)"
+                            } else {
+                                "راهنمای اختصاصی گوشی‌های شیائومی (HyperOS / MIUI)"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (expanded) "برای بستن لمس کنید" else "برای مشاهده تنظیمات مجوزهای پس‌زمینه لمس کنید",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null
+                )
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "در رابط کاربری HyperOS و MIUI برای اجرای سریع روکش با نگهداشتن دکمه Home، این ۳ مورد را بررسی کنید:\n" +
+                            "۱. در بخش «سایر مجوزها»، گزینه Display pop-up windows while running in the background را فعال کنید.\n" +
+                            "۲. «شروع خودکار» (Autostart) را برای سرویس دستیار فعال نگه دارید.\n" +
+                            "۳. در تنظیمات اضافی > میانبرهای اشاره/دکمه، نگهداشتن دکمه Home را روی دستیار دیجیتال تنظیم کنید.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = onOpenXiaomiPopupPermissions,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("xiaomi_popup_perm_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Layers,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("پنجره بازشو", maxLines = 1)
+                        }
+
+                        FilledTonalButton(
+                            onClick = onOpenXiaomiAutostart,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("xiaomi_autostart_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PlayCircleOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("شروع خودکار", maxLines = 1)
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onOpenAssistantSettings,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("باز کردن تنظیمات دستیار پیش‌فرض")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun QuickToolsCard(
     autoTranslate: Boolean,
+    allowCellularDownloads: Boolean,
     onToggleAutoTranslate: (Boolean) -> Unit,
+    onToggleAllowCellular: (Boolean) -> Unit,
     onTestScreenCapture: () -> Unit,
     onPickTestPhoto: () -> Unit
 ) {
@@ -413,7 +566,7 @@ private fun QuickToolsCard(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "آزمایش سریع و رفتار ترجمه",
+                text = "تنظیمات ترجمه و آزمایش سریع",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -423,7 +576,7 @@ private fun QuickToolsCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                     Text(
                         text = "ترجمه خودکار بلافاصله پس از انتخاب متن",
                         style = MaterialTheme.typography.bodyMedium,
@@ -442,7 +595,33 @@ private fun QuickToolsCard(
                 )
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text(
+                        text = "دانلود مدل‌های آفلاین با اینترنت همراه",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "در صورت خاموش بودن، مدل‌های زبان ML Kit فقط از طریق وای‌فای دریافت می‌شوند.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = allowCellularDownloads,
+                    onCheckedChange = onToggleAllowCellular,
+                    modifier = Modifier.testTag("allow_cellular_switch")
+                )
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -603,7 +782,6 @@ private fun LanguagePackItemCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // OCR pack action
                 if (lang.tessCode != null) {
                     if (pack.isDownloadingOcr) {
                         AssistChip(
@@ -645,7 +823,6 @@ private fun LanguagePackItemCard(
                     }
                 }
 
-                // Translation model action
                 if (!pack.isTranslateBuiltIn) {
                     if (pack.isDownloadingTranslate) {
                         AssistChip(
@@ -685,17 +862,15 @@ private fun LanguagePackItemCard(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                                 )
                             }
-                            AnimatedVisibility(visible = true) {
-                                IconButton(
-                                    onClick = onDeleteTranslate,
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.DeleteOutline,
-                                        contentDescription = "حذف مدل ترجمه",
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
+                            IconButton(
+                                onClick = onDeleteTranslate,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.DeleteOutline,
+                                    contentDescription = "حذف مدل ترجمه",
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                     }

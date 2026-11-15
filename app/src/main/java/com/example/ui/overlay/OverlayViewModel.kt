@@ -57,6 +57,7 @@ data class OverlayUiState(
     val screenshot: Bitmap? = null,
     val captureSource: CaptureSource = CaptureSource.ASSISTANT_SCREENSHOT,
     val ocrStage: OcrStage = OcrStage.Scanning,
+    val isRefiningCroppedOcr: Boolean = false,
     val selectedWordIndices: Set<Int> = emptySet(),
     val selectedLineIndices: Set<Int> = emptySet(),
     val editableSourceText: String = "",
@@ -81,13 +82,16 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
     val uiState: StateFlow<OverlayUiState> = _uiState.asStateFlow()
 
     private var ocrJob: Job? = null
+    private var croppedOcrJob: Job? = null
     private var translateJob: Job? = null
     private var autoTranslateEnabled = true
+    private var allowCellularDownloads = true
 
     init {
         viewModelScope.launch {
             val defaultTarget = prefsRepo.targetLanguageCode.first()
             autoTranslateEnabled = prefsRepo.autoTranslateOnSelect.first()
+            allowCellularDownloads = prefsRepo.allowCellularDownloads.first()
             _uiState.update { it.copy(targetLangCode = defaultTarget) }
 
             OverlaySessionStore.payload.collect { payload ->
@@ -112,6 +116,7 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
         isProtectedOrUnavailable: Boolean
     ) {
         ocrJob?.cancel()
+        croppedOcrJob?.cancel()
         translateJob?.cancel()
 
         _uiState.update {
@@ -124,6 +129,7 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     OcrStage.Scanning
                 },
+                isRefiningCroppedOcr = false,
                 selectedWordIndices = emptySet(),
                 selectedLineIndices = emptySet(),
                 editableSourceText = "",
@@ -156,7 +162,7 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
                     _uiState.update {
                         it.copy(
                             ocrStage = OcrStage.Empty,
-                            isSheetExpanded = true
+                            isSheetExpanded = bitmap == null
                         )
                     }
                 } else {
@@ -166,7 +172,6 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
                             isSheetExpanded = bitmap == null
                         )
                     }
-                    // In Assist-text-only mode (no bitmap), select all text immediately
                     if (bitmap == null) {
                         selectAll()
                     }
@@ -208,16 +213,14 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun selectByGesture(normalizedPath: List<Offset>) {
-        val ready = _uiState.value.ocrStage as? OcrStage.Ready ?: return
         if (normalizedPath.isEmpty()) return
 
-        val words = ready.result.words
-        if (words.isEmpty()) return
+        val ready = _uiState.value.ocrStage as? OcrStage.Ready
+        val words = ready?.result?.words.orEmpty()
 
-        val selectedWords = mutableSetOf<Int>()
-
+        // Tap gesture: select line/word immediately from full-screen OCR
         if (normalizedPath.size <= 3) {
-            // Tap gesture: find closest or containing line/word
+            if (ready == null) return
             val pt = normalizedPath.first()
             val hitLine = ready.result.lines.firstOrNull { line ->
                 val r = line.normalizedBounds
@@ -225,63 +228,96 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
                     pt.y in (r.top - 0.02f)..(r.bottom + 0.02f)
             }
             if (hitLine != null) {
-                hitLine.words.forEach { selectedWords.add(it.index) }
-            }
-        } else {
-            // Circle / Lasso / Swipe gesture
-            var minX = 1f
-            var minY = 1f
-            var maxX = 0f
-            var maxY = 0f
-            for (p in normalizedPath) {
-                minX = min(minX, p.x)
-                minY = min(minY, p.y)
-                maxX = max(maxX, p.x)
-                maxY = max(maxY, p.y)
-            }
-            val pad = 0.018f
-            val gestureRect = RectF(
-                (minX - pad).coerceIn(0f, 1f),
-                (minY - pad).coerceIn(0f, 1f),
-                (maxX + pad).coerceIn(0f, 1f),
-                (maxY + pad).coerceIn(0f, 1f)
-            )
-            val isClosedCircleLike = (gestureRect.height() > 0.045f && gestureRect.width() > 0.045f)
-
-            for (word in words) {
-                val wb = word.normalizedBounds
-                val centerX = wb.centerX()
-                val centerY = wb.centerY()
-                val insideBounding = isClosedCircleLike &&
-                    centerX in gestureRect.left..gestureRect.right &&
-                    centerY in gestureRect.top..gestureRect.bottom
-
-                val touchesPath = normalizedPath.any { p ->
-                    p.x in (wb.left - 0.02f)..(wb.right + 0.02f) &&
-                        p.y in (wb.top - 0.02f)..(wb.bottom + 0.02f)
+                val tappedWordIds = hitLine.words.map { it.index }.toSet()
+                if (tappedWordIds.isNotEmpty()) {
+                    applyWordSelection(ready.result, tappedWordIds)
                 }
-                if (insideBounding || touchesPath) {
-                    selectedWords.add(word.index)
-                }
+            }
+            return
+        }
+
+        // Circle / Lasso / Box drag gesture: compute exact normalized bounds
+        var minX = 1f
+        var minY = 1f
+        var maxX = 0f
+        var maxY = 0f
+        for (p in normalizedPath) {
+            minX = min(minX, p.x)
+            minY = min(minY, p.y)
+            maxX = max(maxX, p.x)
+            maxY = max(maxY, p.y)
+        }
+
+        val pad = 0.015f
+        val gestureRect = RectF(
+            (minX - pad).coerceIn(0f, 1f),
+            (minY - pad).coerceIn(0f, 1f),
+            (maxX + pad).coerceIn(0f, 1f),
+            (maxY + pad).coerceIn(0f, 1f)
+        )
+        val isBoxOrCircle = gestureRect.height() > 0.035f && gestureRect.width() > 0.035f
+
+        val selectedWords = mutableSetOf<Int>()
+        for (word in words) {
+            val wb = word.normalizedBounds
+            val cx = wb.centerX()
+            val cy = wb.centerY()
+            val insideBox = isBoxOrCircle &&
+                cx in gestureRect.left..gestureRect.right &&
+                cy in gestureRect.top..gestureRect.bottom
+            val touchesStroke = normalizedPath.any { p ->
+                p.x in (wb.left - 0.02f)..(wb.right + 0.02f) &&
+                    p.y in (wb.top - 0.02f)..(wb.bottom + 0.02f)
+            }
+            if (insideBox || touchesStroke) {
+                selectedWords.add(word.index)
             }
         }
 
-        if (selectedWords.isNotEmpty()) {
+        if (ready != null && selectedWords.isNotEmpty()) {
             applyWordSelection(ready.result, selectedWords)
         }
-    }
 
-    fun toggleLineSelection(lineIndex: Int) {
-        val ready = _uiState.value.ocrStage as? OcrStage.Ready ?: return
-        val line = ready.result.lines.getOrNull(lineIndex) ?: return
-        val lineWordIndices = line.words.map { it.index }.toSet()
-        val current = _uiState.value.selectedWordIndices
-        val updated = if (lineWordIndices.isNotEmpty() && current.containsAll(lineWordIndices)) {
-            current - lineWordIndices
-        } else {
-            current + lineWordIndices
+        // Two-stage high-res cropped OCR pass on the drawn circle/box region for crisp accuracy
+        val bitmap = _uiState.value.screenshot
+        if (bitmap != null && !bitmap.isRecycled && (gestureRect.width() > 0.02f || gestureRect.height() > 0.02f)) {
+            croppedOcrJob?.cancel()
+            croppedOcrJob = viewModelScope.launch {
+                _uiState.update {
+                    it.copy(
+                        isRefiningCroppedOcr = true,
+                        isSheetExpanded = true
+                    )
+                }
+                try {
+                    val activeOcr = prefsRepo.activeOcrLanguages.first()
+                    val refinedText = ocrEngine.recognizeCroppedRegion(
+                        sourceBitmap = bitmap,
+                        normalizedBounds = gestureRect,
+                        requestedTessCodes = activeOcr
+                    )
+                    if (refinedText.isNotBlank()) {
+                        _uiState.update {
+                            it.copy(
+                                editableSourceText = refinedText,
+                                isRefiningCroppedOcr = false,
+                                isSheetExpanded = true
+                            )
+                        }
+                        if (autoTranslateEnabled) {
+                            runTranslation(refinedText, autoDownloadIfOnline = true)
+                        }
+                    } else {
+                        _uiState.update { it.copy(isRefiningCroppedOcr = false) }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Cropped OCR pass failed", e)
+                    _uiState.update { it.copy(isRefiningCroppedOcr = false) }
+                }
+            }
         }
-        applyWordSelection(ready.result, updated)
     }
 
     fun selectAll() {
@@ -291,12 +327,14 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun clearSelection() {
+        croppedOcrJob?.cancel()
         translateJob?.cancel()
         _uiState.update {
             it.copy(
                 selectedWordIndices = emptySet(),
                 selectedLineIndices = emptySet(),
                 editableSourceText = "",
+                isRefiningCroppedOcr = false,
                 translationStage = TranslationStage.Idle,
                 isSheetExpanded = false
             )
@@ -354,8 +392,12 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
         translateJob = viewModelScope.launch {
             _uiState.update { it.copy(translationStage = TranslationStage.DownloadingModels) }
             try {
+                allowCellularDownloads = prefsRepo.allowCellularDownloads.first()
                 for (code in missingCodes) {
-                    translationEngine.downloadModel(code).getOrThrow()
+                    translationEngine.downloadModel(
+                        mlKitCode = code,
+                        allowCellular = allowCellularDownloads
+                    ).getOrThrow()
                 }
                 val text = _uiState.value.editableSourceText.trim()
                 if (text.isNotEmpty()) {
@@ -381,7 +423,6 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
-        // Preserve natural line grouping & word reading order
         val selectedLines = mutableSetOf<Int>()
         val formattedText = buildString {
             var firstLine = true
@@ -425,13 +466,15 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun runTranslationInternal(text: String, autoDownloadIfOnline: Boolean) {
         val state = _uiState.value
+        allowCellularDownloads = prefsRepo.allowCellularDownloads.first()
         _uiState.update { it.copy(translationStage = TranslationStage.Translating) }
         try {
             val outcome = translationEngine.translate(
                 text = text,
                 sourceCode = state.sourceLangCode,
                 targetCode = state.targetLangCode,
-                autoDownloadIfOnline = autoDownloadIfOnline
+                autoDownloadIfOnline = autoDownloadIfOnline,
+                allowCellular = allowCellularDownloads
             )
             _uiState.update {
                 it.copy(
@@ -468,6 +511,7 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         ocrJob?.cancel()
+        croppedOcrJob?.cancel()
         translateJob?.cancel()
         super.onCleared()
     }

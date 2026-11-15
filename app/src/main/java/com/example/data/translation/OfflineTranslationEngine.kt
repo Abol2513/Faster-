@@ -55,7 +55,10 @@ class OfflineTranslationEngine(private val context: Context) {
         return modelManager.isModelDownloaded(model).awaitResult()
     }
 
-    suspend fun downloadModel(mlKitCode: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun downloadModel(
+        mlKitCode: String,
+        allowCellular: Boolean = true
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val tag = toMlKitTranslateLanguage(mlKitCode)
                 ?: throw IllegalArgumentException("زبان $mlKitCode پشتیبانی نمی‌شود.")
@@ -63,8 +66,13 @@ class OfflineTranslationEngine(private val context: Context) {
             if (!isNetworkAvailable()) {
                 throw IOException("برای دانلود مدل آفلاین زبان، اتصال اینترنت لازم است.")
             }
+            if (!allowCellular && !isWifiConnected()) {
+                throw IOException("دانلود روی اینترنت همراه غیرفعال است. به وای‌فای متصل شوید یا دانلود با دیتای موبایل را در تنظیمات فعال کنید.")
+            }
             val model = TranslateRemoteModel.Builder(tag).build()
-            val conditions = DownloadConditions.Builder().build()
+            val conditions = DownloadConditions.Builder().apply {
+                if (!allowCellular) requireWifi()
+            }.build()
             modelManager.download(model, conditions).awaitResult()
         }
     }
@@ -91,7 +99,6 @@ class OfflineTranslationEngine(private val context: Context) {
             return@withContext normalizeToAppCode(detected)
         }
 
-        // Script-based offline heuristic fallback for short words/mixed text
         heuristicDetectScript(cleaned)
     }
 
@@ -99,7 +106,8 @@ class OfflineTranslationEngine(private val context: Context) {
         text: String,
         sourceCode: String,
         targetCode: String,
-        autoDownloadIfOnline: Boolean = true
+        autoDownloadIfOnline: Boolean = true,
+        allowCellular: Boolean = true
     ): TranslationOutcome = withContext(Dispatchers.IO) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) {
@@ -139,15 +147,21 @@ class OfflineTranslationEngine(private val context: Context) {
         }
 
         if (missing.isNotEmpty()) {
-            if (autoDownloadIfOnline && isNetworkAvailable()) {
+            val canDownloadNow = autoDownloadIfOnline && isNetworkAvailable() && (allowCellular || isWifiConnected())
+            if (canDownloadNow) {
                 for (code in missing) {
-                    downloadModel(code).getOrThrow()
+                    downloadModel(code, allowCellular = allowCellular).getOrThrow()
                 }
             } else {
                 val names = missing.joinToString(" و ") { LanguageCatalog.displayNameForCode(it) }
+                val reason = if (!allowCellular && isNetworkAvailable() && !isWifiConnected()) {
+                    "دانلود مدل ترجمه آفلاین ($names) به وای‌فای محدود شده است. می‌توانید گزینه دانلود با اینترنت همراه را فعال کنید."
+                } else {
+                    "مدل ترجمه آفلاین برای زبان $names هنوز دریافت نشده است. لطفاً اینترنت را روشن کرده و مدل را دریافت کنید."
+                }
                 throw OfflineModelMissingException(
                     missingLanguageCodes = missing,
-                    message = "مدل ترجمه آفلاین برای زبان $names هنوز دریافت نشده است. لطفاً اینترنت را روشن کرده و مدل را دریافت کنید."
+                    message = reason
                 )
             }
         }
@@ -176,6 +190,14 @@ class OfflineTranslationEngine(private val context: Context) {
         val network = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(network) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    fun isWifiConnected(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
     private fun heuristicDetectScript(text: String): String {

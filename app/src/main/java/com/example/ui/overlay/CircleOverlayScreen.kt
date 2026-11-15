@@ -26,17 +26,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -80,7 +82,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -145,7 +146,7 @@ fun CircleOverlayScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.55f))
+            .background(Color.Black.copy(alpha = 0.58f))
     ) {
         // 1. Screenshot + Circle-to-Search Interactive Canvas
         ScreenshotInteractiveLayer(
@@ -156,16 +157,19 @@ fun CircleOverlayScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // 2. Top Floating Action Bar (One-tap Close, Status Hint, Select All / Clear)
+        // 2. Top Floating Action Bar respecting safeDrawing (status bar + display cutout)
         TopOverlayControls(
             ocrStage = state.ocrStage,
+            isRefining = state.isRefiningCroppedOcr,
             hasSelection = state.selectedWordIndices.isNotEmpty(),
             onSelectAll = onSelectAll,
             onClearSelection = onClearSelection,
             onClose = onClose,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .statusBarsPadding()
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+                )
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         )
 
@@ -176,7 +180,9 @@ fun CircleOverlayScreen(
             exit = fadeOut(tween(200)) + slideOutVertically { -it / 2 },
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .statusBarsPadding()
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+                )
                 .padding(top = 64.dp)
         ) {
             Surface(
@@ -211,7 +217,9 @@ fun CircleOverlayScreen(
             exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+                )
                 .padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
         ) {
             Surface(
@@ -385,7 +393,6 @@ private fun ScreenshotInteractiveLayer(
                     )
                 }
         ) {
-            // Subtle Circle-to-Search luminous border glow
             val edgeStrokeWidth = if (ocrStage is OcrStage.Scanning) 14f else 6f
             val edgeAlpha = if (ocrStage is OcrStage.Scanning) glowPulse else 0.45f
             drawRect(
@@ -399,7 +406,6 @@ private fun ScreenshotInteractiveLayer(
                 style = Stroke(width = edgeStrokeWidth)
             )
 
-            // Draw OCR word capsules & selection highlights
             if (readyResult != null) {
                 for (word in readyResult.words) {
                     val wb = word.normalizedBounds
@@ -441,7 +447,6 @@ private fun ScreenshotInteractiveLayer(
                 }
             }
 
-            // Draw live finger circle/highlight stroke
             if (activeStroke.size > 1) {
                 val path = Path().apply {
                     moveTo(activeStroke.first().x, activeStroke.first().y)
@@ -467,6 +472,7 @@ private fun ScreenshotInteractiveLayer(
 @Composable
 private fun TopOverlayControls(
     ocrStage: OcrStage,
+    isRefining: Boolean,
     hasSelection: Boolean,
     onSelectAll: () -> Unit,
     onClearSelection: () -> Unit,
@@ -497,20 +503,26 @@ private fun TopOverlayControls(
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.90f),
             tonalElevation = 4.dp,
-            modifier = Modifier.weight(1f, fill = false).padding(horizontal = 8.dp)
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .padding(horizontal = 8.dp)
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (ocrStage is OcrStage.Scanning) {
+                if (ocrStage is OcrStage.Scanning || isRefining) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp
                     )
                     Text(
-                        text = "در حال تشخیص متن صفحه…",
+                        text = if (isRefining) {
+                            "بازخوانی دقیق ناحیه دایره…"
+                        } else {
+                            "در حال تشخیص متن صفحه…"
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -594,18 +606,19 @@ private fun TranslationBottomSheet(
         modifier = Modifier
             .fillMaxWidth()
             .widthIn(max = 720.dp)
-            .navigationBarsPadding()
-            .imePadding()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+                )
+                .imePadding()
                 .heightIn(max = 520.dp)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Sheet Header + Handle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -651,7 +664,7 @@ private fun TranslationBottomSheet(
                     onRequestMediaProjectionFallback = onRequestMediaProjectionFallback,
                     onClose = onClose
                 )
-            } else if (state.ocrStage is OcrStage.Empty) {
+            } else if (state.ocrStage is OcrStage.Empty && state.editableSourceText.isBlank()) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -659,14 +672,14 @@ private fun TranslationBottomSheet(
                 ) {
                     Column(
                         modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = "متن قابل خواندنی در تصویر یافت نشد.",
+                            text = "متنی به صورت خودکار یافت نشد؛ روی بخش موردنظر دایره بکشید.",
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            text = "می‌توانید متن مورد نظر خود را پایین تایپ یا جای‌گذاری کنید تا فوراً ترجمه شود.",
+                            text = "همچنین می‌توانید متن را در کادر زیر تایپ یا جای‌گذاری کنید.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -675,7 +688,6 @@ private fun TranslationBottomSheet(
             }
 
             if (state.ocrStage !is OcrStage.UnavailableOrProtected) {
-                // Source <-> Target Language Selector Row
                 LanguageSelectorBar(
                     sourceLangCode = state.sourceLangCode,
                     detectedSourceCode = state.detectedSourceCode,
@@ -685,7 +697,6 @@ private fun TranslationBottomSheet(
                     onSwapLanguages = onSwapLanguages
                 )
 
-                // Responsive Dual Cards: Side-by-side on wide screens, stacked on phones
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                     val isWide = maxWidth >= 540.dp
                     if (isWide) {
@@ -695,6 +706,7 @@ private fun TranslationBottomSheet(
                         ) {
                             OriginalEditableCard(
                                 text = state.editableSourceText,
+                                isRefining = state.isRefiningCroppedOcr,
                                 detectedOrSelectedLang = if (state.sourceLangCode == LanguageCatalog.AUTO_DETECT_CODE) {
                                     state.detectedSourceCode ?: "fa"
                                 } else {
@@ -719,6 +731,7 @@ private fun TranslationBottomSheet(
                         ) {
                             OriginalEditableCard(
                                 text = state.editableSourceText,
+                                isRefining = state.isRefiningCroppedOcr,
                                 detectedOrSelectedLang = if (state.sourceLangCode == LanguageCatalog.AUTO_DETECT_CODE) {
                                     state.detectedSourceCode ?: "fa"
                                 } else {
@@ -739,7 +752,6 @@ private fun TranslationBottomSheet(
                     }
                 }
 
-                // Copy Action Buttons
                 val hasOriginal = state.editableSourceText.isNotBlank()
                 val hasTranslation = state.translationStage is TranslationStage.Success &&
                     state.translationStage.translatedText.isNotBlank()
@@ -1004,6 +1016,7 @@ private fun LanguageSelectorBar(
 @Composable
 private fun OriginalEditableCard(
     text: String,
+    isRefining: Boolean,
     detectedOrSelectedLang: String,
     onTextChange: (String) -> Unit,
     onRetranslate: () -> Unit,
@@ -1027,7 +1040,7 @@ private fun OriginalEditableCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "متن استخراج‌شده (قابل ویرایش)",
+                    text = if (isRefining) "در حال خوانش دقیق ناحیه…" else "متن استخراج‌شده (قابل ویرایش)",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1048,6 +1061,10 @@ private fun OriginalEditableCard(
                         style = MaterialTheme.typography.labelMedium
                     )
                 }
+            }
+
+            if (isRefining) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
             CompositionLocalProvider(

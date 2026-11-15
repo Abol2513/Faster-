@@ -19,6 +19,20 @@ object OverlaySessionStore {
     private val _payload = MutableStateFlow<ScreenSessionPayload?>(null)
     val payload: StateFlow<ScreenSessionPayload?> = _payload.asStateFlow()
 
+    private var pendingAssistLines: List<OcrLine> = emptyList()
+
+    @Synchronized
+    fun setPendingAssistLines(lines: List<OcrLine>) {
+        pendingAssistLines = lines
+    }
+
+    @Synchronized
+    fun consumePendingAssistLines(): List<OcrLine> {
+        val copy = pendingAssistLines
+        pendingAssistLines = emptyList()
+        return copy
+    }
+
     @Synchronized
     fun publish(
         bitmap: Bitmap?,
@@ -27,11 +41,12 @@ object OverlaySessionStore {
         isProtectedOrUnavailable: Boolean = false
     ): Long {
         val previous = _payload.value
+        val mergedAssist = assistLines.ifEmpty { consumePendingAssistLines() }
         val id = System.nanoTime()
         _payload.value = ScreenSessionPayload(
             id = id,
             bitmap = bitmap,
-            assistLines = assistLines,
+            assistLines = mergedAssist,
             source = source,
             isProtectedOrUnavailable = isProtectedOrUnavailable
         )
@@ -45,6 +60,7 @@ object OverlaySessionStore {
     fun clear() {
         val current = _payload.value
         _payload.value = null
+        pendingAssistLines = emptyList()
         if (current?.bitmap != null && !current.bitmap.isRecycled) {
             current.bitmap.recycle()
         }

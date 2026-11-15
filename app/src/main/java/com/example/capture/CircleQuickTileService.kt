@@ -19,11 +19,14 @@ class CircleQuickTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        val intent = ScreenCaptureRequestActivity.createIntent(this)
+        val intent = ScreenCaptureRequestActivity.createIntent(
+            context = this,
+            fromQuickTile = true
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val pendingIntent = PendingIntent.getActivity(
                 this,
-                0,
+                101,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )

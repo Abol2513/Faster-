@@ -13,6 +13,7 @@ import com.example.domain.model.OcrResult
 import com.example.domain.model.OcrWord
 import com.googlecode.tesseract.android.TessBaseAPI
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -22,6 +23,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 class TesseractOcrEngine(private val context: Context) {
@@ -32,8 +34,12 @@ class TesseractOcrEngine(private val context: Context) {
             "https://github.com/tesseract-ocr/tessdata_fast/raw/main/"
         private val BUNDLED_LANGUAGES = listOf("fas", "eng")
         private const val MAX_OCR_DIMENSION = 1920
+        private const val MIN_CROP_OCR_DIMENSION = 420
+        private const val MAX_CROP_OCR_DIMENSION = 1440
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val tessDispatcher = Dispatchers.IO.limitedParallelism(1)
     private val setupMutex = Mutex()
     private val ocrMutex = Mutex()
 
@@ -51,13 +57,19 @@ class TesseractOcrEngine(private val context: Context) {
             for (lang in BUNDLED_LANGUAGES) {
                 val fileName = "$lang.traineddata"
                 val outFile = File(tessDataDir, fileName)
-                if (!outFile.exists() || outFile.length() == 0L) {
+                if (!outFile.exists() || outFile.length() < 10_000L) {
+                    val tempFile = File(tessDataDir, "$fileName.tmp")
                     context.assets.open("tessdata/$fileName").use { input ->
-                        FileOutputStream(outFile).use { output ->
+                        FileOutputStream(tempFile).use { output ->
                             input.copyTo(output)
                         }
                     }
-                    Log.d(TAG, "Copied bundled $fileName to ${outFile.absolutePath}")
+                    if (outFile.exists()) outFile.delete()
+                    if (!tempFile.renameTo(outFile)) {
+                        tempFile.copyTo(outFile, overwrite = true)
+                        tempFile.delete()
+                    }
+                    Log.d(TAG, "Copied bundled $fileName (${outFile.length()} bytes)")
                 }
             }
         }
@@ -67,7 +79,7 @@ class TesseractOcrEngine(private val context: Context) {
         val installed = mutableSetOf<String>()
         installed.addAll(BUNDLED_LANGUAGES)
         tessDataDir.listFiles()?.forEach { file ->
-            if (file.isFile && file.name.endsWith(".traineddata") && file.length() > 0L) {
+            if (file.isFile && file.name.endsWith(".traineddata") && file.length() > 10_000L) {
                 installed.add(file.name.removeSuffix(".traineddata"))
             }
         }
@@ -77,7 +89,7 @@ class TesseractOcrEngine(private val context: Context) {
     fun isOcrLanguageInstalled(tessCode: String): Boolean {
         if (tessCode in BUNDLED_LANGUAGES) return true
         val file = File(tessDataDir, "$tessCode.traineddata")
-        return file.exists() && file.length() > 0L
+        return file.exists() && file.length() > 10_000L
     }
 
     suspend fun downloadOcrLanguage(tessCode: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -125,10 +137,14 @@ class TesseractOcrEngine(private val context: Context) {
         if (file.exists()) file.delete() else false
     }
 
+    /**
+     * Full-screen initial OCR pass returning normalized word and line bounding boxes.
+     * Protected by single-threaded dispatcher and Mutex so rapid runs never crash native TessBaseAPI.
+     */
     suspend fun recognize(
         sourceBitmap: Bitmap,
         requestedTessCodes: Set<String>
-    ): OcrResult = withContext(Dispatchers.Default) {
+    ): OcrResult = withContext(tessDispatcher) {
         ensureBundledTessData()
 
         val installed = getInstalledOcrCodes()
@@ -136,12 +152,16 @@ class TesseractOcrEngine(private val context: Context) {
             .ifEmpty { listOf("fas", "eng") }
         val langExpression = usableCodes.joinToString("+")
 
-        val prepared = prepareBitmapForOcr(sourceBitmap)
-        val imgW = prepared.width.toFloat().coerceAtLeast(1f)
-        val imgH = prepared.height.toFloat().coerceAtLeast(1f)
-
         ocrMutex.withLock {
+            if (sourceBitmap.isRecycled) {
+                return@withLock OcrResult("", emptyList(), emptyList(), OcrEngineSource.TESSERACT)
+            }
+
+            val prepared = prepareBitmapForOcr(sourceBitmap)
+            val imgW = prepared.width.toFloat().coerceAtLeast(1f)
+            val imgH = prepared.height.toFloat().coerceAtLeast(1f)
             val tess = TessBaseAPI()
+
             try {
                 val initialized = tess.init(
                     tesseractRootDir.absolutePath + File.separator,
@@ -154,7 +174,6 @@ class TesseractOcrEngine(private val context: Context) {
                 tess.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
                 tess.setImage(prepared)
 
-                // Trigger recognition
                 val rawFullText = tess.utF8Text.orEmpty().trim()
                 val iterator = tess.resultIterator
 
@@ -240,19 +259,20 @@ class TesseractOcrEngine(private val context: Context) {
                     }
                 } else if (wordBoxes.isNotEmpty()) {
                     wordBoxes.forEachIndexed { idx, (wText, wRect) ->
-                        val word = OcrWord(
-                            index = idx,
-                            text = wText,
-                            normalizedBounds = RectF(
-                                (wRect.left / imgW).coerceIn(0f, 1f),
-                                (wRect.top / imgH).coerceIn(0f, 1f),
-                                (wRect.right / imgW).coerceIn(0f, 1f),
-                                (wRect.bottom / imgH).coerceIn(0f, 1f)
-                            ),
-                            lineIndex = 0,
-                            paragraphIndex = 0
+                        words.add(
+                            OcrWord(
+                                index = idx,
+                                text = wText,
+                                normalizedBounds = RectF(
+                                    (wRect.left / imgW).coerceIn(0f, 1f),
+                                    (wRect.top / imgH).coerceIn(0f, 1f),
+                                    (wRect.right / imgW).coerceIn(0f, 1f),
+                                    (wRect.bottom / imgH).coerceIn(0f, 1f)
+                                ),
+                                lineIndex = 0,
+                                paragraphIndex = 0
+                            )
                         )
-                        words.add(word)
                     }
                     lines.add(
                         OcrLine(
@@ -286,6 +306,75 @@ class TesseractOcrEngine(private val context: Context) {
         }
     }
 
+    /**
+     * High-resolution cropped OCR pass on the user's drawn circle/box region.
+     * Applies smart padding, ARGB_8888 conversion, and safe upscaling for small text.
+     */
+    suspend fun recognizeCroppedRegion(
+        sourceBitmap: Bitmap,
+        normalizedBounds: RectF,
+        requestedTessCodes: Set<String>
+    ): String = withContext(tessDispatcher) {
+        ensureBundledTessData()
+
+        val installed = getInstalledOcrCodes()
+        val usableCodes = requestedTessCodes.filter { it in installed }
+            .ifEmpty { listOf("fas", "eng") }
+        val langExpression = usableCodes.joinToString("+")
+
+        ocrMutex.withLock {
+            if (sourceBitmap.isRecycled || sourceBitmap.width < 4 || sourceBitmap.height < 4) {
+                return@withLock ""
+            }
+
+            val bmpW = sourceBitmap.width
+            val bmpH = sourceBitmap.height
+
+            val rawLeft = (normalizedBounds.left * bmpW).roundToInt()
+            val rawTop = (normalizedBounds.top * bmpH).roundToInt()
+            val rawRight = (normalizedBounds.right * bmpW).roundToInt()
+            val rawBottom = (normalizedBounds.bottom * bmpH).roundToInt()
+
+            val spanW = (rawRight - rawLeft).coerceAtLeast(24)
+            val spanH = (rawBottom - rawTop).coerceAtLeast(24)
+            val padX = max(16, (spanW * 0.06f).roundToInt())
+            val padY = max(16, (spanH * 0.08f).roundToInt())
+
+            val cropLeft = (rawLeft - padX).coerceIn(0, bmpW - 2)
+            val cropTop = (rawTop - padY).coerceIn(0, bmpH - 2)
+            val cropRight = (rawRight + padX).coerceIn(cropLeft + 2, bmpW)
+            val cropBottom = (rawBottom + padY).coerceIn(cropTop + 2, bmpH)
+
+            val cropW = (cropRight - cropLeft).coerceAtLeast(2)
+            val cropH = (cropBottom - cropTop).coerceAtLeast(2)
+
+            val cropped = Bitmap.createBitmap(sourceBitmap, cropLeft, cropTop, cropW, cropH)
+            val preprocessed = preprocessCropForOcr(cropped)
+            val tess = TessBaseAPI()
+
+            try {
+                val initialized = tess.init(
+                    tesseractRootDir.absolutePath + File.separator,
+                    langExpression,
+                    TessBaseAPI.OEM_LSTM_ONLY
+                )
+                if (!initialized) return@withLock ""
+
+                tess.pageSegMode = TessBaseAPI.PageSegMode.PSM_AUTO
+                tess.setImage(preprocessed)
+                tess.utF8Text.orEmpty().trim()
+            } finally {
+                tess.recycle()
+                if (preprocessed !== cropped && !preprocessed.isRecycled) {
+                    preprocessed.recycle()
+                }
+                if (!cropped.isRecycled) {
+                    cropped.recycle()
+                }
+            }
+        }
+    }
+
     private fun prepareBitmapForOcr(source: Bitmap): Bitmap {
         val maxSide = max(source.width, source.height)
         val scaled = if (maxSide > MAX_OCR_DIMENSION) {
@@ -303,6 +392,32 @@ class TesseractOcrEngine(private val context: Context) {
             val converted = scaled.copy(Bitmap.Config.ARGB_8888, false)
             if (scaled !== source && !scaled.isRecycled) {
                 scaled.recycle()
+            }
+            converted
+        }
+    }
+
+    private fun preprocessCropForOcr(crop: Bitmap): Bitmap {
+        val minDim = min(crop.width, crop.height)
+        val maxDim = max(crop.width, crop.height)
+
+        val resized = if (minDim < MIN_CROP_OCR_DIMENSION && maxDim < MAX_CROP_OCR_DIMENSION) {
+            val desiredScale = (MIN_CROP_OCR_DIMENSION.toFloat() / minDim.coerceAtLeast(1)).coerceIn(1.5f, 2.5f)
+            val maxAllowedScale = MAX_CROP_OCR_DIMENSION.toFloat() / maxDim.coerceAtLeast(1)
+            val finalScale = min(desiredScale, maxAllowedScale).coerceAtLeast(1f)
+            val newW = (crop.width * finalScale).roundToInt().coerceAtLeast(1)
+            val newH = (crop.height * finalScale).roundToInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(crop, newW, newH, true)
+        } else {
+            crop
+        }
+
+        return if (resized.config == Bitmap.Config.ARGB_8888) {
+            resized
+        } else {
+            val converted = resized.copy(Bitmap.Config.ARGB_8888, false)
+            if (resized !== crop && !resized.isRecycled) {
+                resized.recycle()
             }
             converted
         }

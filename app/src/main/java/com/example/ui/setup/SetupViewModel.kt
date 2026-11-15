@@ -2,14 +2,17 @@ package com.example.ui.setup
 
 import android.app.Application
 import android.app.role.RoleManager
+import android.content.ComponentName
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.service.voice.VoiceInteractionService
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.assistant.CircleVoiceInteractionService
 import com.example.data.ocr.TesseractOcrEngine
 import com.example.data.prefs.AppPreferencesRepository
 import com.example.data.session.OverlaySessionStore
@@ -17,6 +20,7 @@ import com.example.data.translation.OfflineTranslationEngine
 import com.example.domain.model.CaptureSource
 import com.example.domain.model.LanguageCatalog
 import com.example.domain.model.LanguagePackStatus
+import com.example.util.DeviceCompatibilityHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,9 +35,11 @@ import kotlinx.coroutines.withContext
 
 data class SetupUiState(
     val isDefaultAssistant: Boolean = false,
+    val isXiaomiDevice: Boolean = DeviceCompatibilityHelper.isXiaomiDevice(),
     val targetLanguageCode: String = "fa",
     val activeOcrLanguages: Set<String> = setOf("fas", "eng"),
     val autoTranslateOnSelect: Boolean = true,
+    val allowCellularDownloads: Boolean = true,
     val languagePacks: List<LanguagePackStatus> = emptyList(),
     val isLoadingPacks: Boolean = true
 )
@@ -73,6 +79,11 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             prefsRepo.autoTranslateOnSelect.collectLatest { auto ->
                 _uiState.update { it.copy(autoTranslateOnSelect = auto) }
+            }
+        }
+        viewModelScope.launch {
+            prefsRepo.allowCellularDownloads.collectLatest { allowCellular ->
+                _uiState.update { it.copy(allowCellularDownloads = allowCellular) }
             }
         }
     }
@@ -132,6 +143,12 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setAllowCellularDownloads(allowed: Boolean) {
+        viewModelScope.launch {
+            prefsRepo.setAllowCellularDownloads(allowed)
+        }
+    }
+
     fun downloadOcrPack(tessCode: String) {
         viewModelScope.launch {
             downloadingOcr.update { it + tessCode }
@@ -161,7 +178,10 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             downloadingTranslate.update { it + mlKitCode }
             refreshLanguagePacks()
-            val result = translationEngine.downloadModel(mlKitCode)
+            val result = translationEngine.downloadModel(
+                mlKitCode = mlKitCode,
+                allowCellular = _uiState.value.allowCellularDownloads
+            )
             downloadingTranslate.update { it - mlKitCode }
             result.onSuccess {
                 _messages.tryEmit("مدل ترجمه آفلاین با موفقیت دانلود شد.")
@@ -206,12 +226,24 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun checkDefaultAssistant(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val isRoleHeld = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val roleManager = context.getSystemService(RoleManager::class.java)
-            if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
-                return roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
-            }
+            roleManager != null &&
+                roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT) &&
+                roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
+        } else {
+            false
         }
+        if (isRoleHeld) return true
+
+        val isVoiceActive = runCatching {
+            VoiceInteractionService.isActiveService(
+                context,
+                ComponentName(context, CircleVoiceInteractionService::class.java)
+            )
+        }.getOrDefault(false)
+        if (isVoiceActive) return true
+
         val assistantSetting = Settings.Secure.getString(
             context.contentResolver,
             "assistant"

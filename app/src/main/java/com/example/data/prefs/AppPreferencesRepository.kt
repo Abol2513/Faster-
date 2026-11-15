@@ -19,6 +19,7 @@ class AppPreferencesRepository(private val context: Context) {
         val TARGET_LANGUAGE = stringPreferencesKey("target_language")
         val ACTIVE_OCR_LANGUAGES = stringSetPreferencesKey("active_ocr_languages")
         val AUTO_TRANSLATE = booleanPreferencesKey("auto_translate_on_select")
+        val ALLOW_CELLULAR_DOWNLOADS = booleanPreferencesKey("allow_cellular_downloads")
     }
 
     val targetLanguageCode: Flow<String> = context.dataStore.data.map { prefs ->
@@ -31,6 +32,10 @@ class AppPreferencesRepository(private val context: Context) {
 
     val autoTranslateOnSelect: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[Keys.AUTO_TRANSLATE] ?: true
+    }
+
+    val allowCellularDownloads: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[Keys.ALLOW_CELLULAR_DOWNLOADS] ?: true
     }
 
     suspend fun setTargetLanguage(code: String) {
@@ -60,6 +65,12 @@ class AppPreferencesRepository(private val context: Context) {
     suspend fun setAutoTranslateOnSelect(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[Keys.AUTO_TRANSLATE] = enabled
+        }
+    }
+
+    suspend fun setAllowCellularDownloads(allowed: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.ALLOW_CELLULAR_DOWNLOADS] = allowed
         }
     }
 }
