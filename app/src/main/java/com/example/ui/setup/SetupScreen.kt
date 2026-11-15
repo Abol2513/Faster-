@@ -24,21 +24,31 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assistant
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.OfflinePin
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Screenshot
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.DashboardCustomize
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AssistChip
@@ -52,17 +62,23 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,14 +86,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.model.LanguageCatalog
 import com.example.domain.model.LanguagePackStatus
+import com.example.domain.model.PrewarmStatus
+import com.example.domain.model.TranslationEngineMode
 
 @Composable
 fun SetupScreen(
@@ -91,6 +115,11 @@ fun SetupScreen(
     onTestScreenCapture: () -> Unit,
     onPickTestPhoto: () -> Unit,
     onSelectTargetLanguage: (String) -> Unit,
+    onSelectTranslationMode: (TranslationEngineMode) -> Unit,
+    onSaveGeminiApiKey: (String) -> Unit,
+    onPausePrewarm: () -> Unit,
+    onResumePrewarm: () -> Unit,
+    onRetryCleanPrewarm: () -> Unit,
     onToggleOcrLanguage: (String, Boolean) -> Unit,
     onToggleAutoTranslate: (Boolean) -> Unit,
     onToggleAllowCellular: (Boolean) -> Unit,
@@ -136,6 +165,15 @@ fun SetupScreen(
                 }
 
                 item {
+                    TranslationEngineAndApiCard(
+                        selectedMode = state.translationEngineMode,
+                        savedApiKey = state.geminiApiKey,
+                        onSelectMode = onSelectTranslationMode,
+                        onSaveGeminiApiKey = onSaveGeminiApiKey
+                    )
+                }
+
+                item {
                     QuickToolsCard(
                         autoTranslate = state.autoTranslateOnSelect,
                         allowCellularDownloads = state.allowCellularDownloads,
@@ -161,10 +199,19 @@ fun SetupScreen(
                         modifier = Modifier.padding(top = 4.dp, start = 4.dp)
                     )
                     Text(
-                        text = "زبان‌های فارسی و انگلیسی از پیش داخل برنامه نصب هستند. برای سایر زبان‌ها می‌توانید بسته‌های کم‌حجم آفلاین را دانلود کنید.",
+                        text = "تشخیص متن (OCR) برای ۱۰ زبان اصلی دنیا به‌صورت داخلی داخل برنامه آماده است. مدل‌های ترجمه آفلاین نیز به‌صورت نوبتی و بدون تداخل در پس‌زمینه دریافت می‌شوند.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+                    )
+                }
+
+                item {
+                    PrewarmStatusCard(
+                        status = state.prewarmStatus,
+                        onPause = onPausePrewarm,
+                        onResume = onResumePrewarm,
+                        onRetryClean = onRetryCleanPrewarm
                     )
                 }
 
@@ -711,6 +758,327 @@ private fun DefaultTargetLanguageCard(
 }
 
 @Composable
+private fun TranslationEngineAndApiCard(
+    selectedMode: TranslationEngineMode,
+    savedApiKey: String,
+    onSelectMode: (TranslationEngineMode) -> Unit,
+    onSaveGeminiApiKey: (String) -> Unit
+) {
+    var apiInput by rememberSaveable { mutableStateOf(savedApiKey) }
+    var showKeyText by rememberSaveable { mutableStateOf(false) }
+    var showApiSection by rememberSaveable { mutableStateOf(savedApiKey.isNotBlank()) }
+
+    LaunchedEffect(savedApiKey) {
+        if (savedApiKey != apiInput && apiInput.isBlank()) {
+            apiInput = savedApiKey
+        }
+    }
+
+    ElevatedCard(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column {
+                    Text(
+                        text = "موتور ترجمه (آنلاین و آفلاین)",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "در حالت هوشمند هنگام دسترسی به اینترنت از ترجمه دقیق آنلاین استفاده می‌شود و در نبود اینترنت به‌طور خودکار به موتور آفلاین می‌رود.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(TranslationEngineMode.entries, key = { it.key }) { mode ->
+                    val icon = when (mode) {
+                        TranslationEngineMode.SMART_HYBRID -> Icons.Filled.AutoAwesome
+                        TranslationEngineMode.ONLINE_ONLY -> Icons.Filled.Cloud
+                        TranslationEngineMode.OFFLINE_ONLY -> Icons.Filled.OfflinePin
+                    }
+                    FilterChip(
+                        selected = selectedMode == mode,
+                        onClick = { onSelectMode(mode) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        label = { Text(mode.persianLabel) },
+                        modifier = Modifier.testTag("engine_mode_chip_${mode.key}")
+                    )
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showApiSection = !showApiSection }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Key,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Column {
+                        Text(
+                            text = "کلید Gemini API (اختیاری)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = if (savedApiKey.isNotBlank()) {
+                                "فعال و ذخیره‌شده روی دستگاه"
+                            } else {
+                                "بدون کلید هم سرویس رایگان آنلاین فعال است"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = if (showApiSection) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null
+                )
+            }
+
+            AnimatedVisibility(visible = showApiSection) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        OutlinedTextField(
+                            value = apiInput,
+                            onValueChange = { apiInput = it },
+                            label = { Text("Gemini API Key") },
+                            placeholder = { Text("AIza...") },
+                            singleLine = true,
+                            visualTransformation = if (showKeyText) {
+                                VisualTransformation.None
+                            } else {
+                                PasswordVisualTransformation()
+                            },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            trailingIcon = {
+                                IconButton(onClick = { showKeyText = !showKeyText }) {
+                                    Icon(
+                                        imageVector = if (showKeyText) {
+                                            Icons.Filled.VisibilityOff
+                                        } else {
+                                            Icons.Filled.Visibility
+                                        },
+                                        contentDescription = "نمایش یا مخفی کردن کلید"
+                                    )
+                                }
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("gemini_api_key_input")
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = { onSaveGeminiApiKey(apiInput) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("save_gemini_api_key_button")
+                        ) {
+                            Text("ذخیره کلید روی دستگاه")
+                        }
+                        if (savedApiKey.isNotBlank() || apiInput.isNotBlank()) {
+                            OutlinedButton(
+                                onClick = {
+                                    apiInput = ""
+                                    onSaveGeminiApiKey("")
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.testTag("clear_gemini_api_key_button")
+                            ) {
+                                Text("پاک کردن")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrewarmStatusCard(
+    status: PrewarmStatus,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onRetryClean: () -> Unit
+) {
+    val allDone = !status.isRunning && status.lastError == null && status.completedCount >= status.totalCount
+    val progress = if (status.totalCount > 0) {
+        (status.completedCount.toFloat() / status.totalCount.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
+    ElevatedCard(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = when {
+                status.lastError != null -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+                allDone -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                else -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+            }
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = when {
+                            allDone -> "تمام مدل‌های ترجمه آفلاین زبان‌های اصلی آماده هستند"
+                            status.isRunning && status.currentLanguageCode != null ->
+                                "در حال آماده‌سازی مدل آفلاین: ${LanguageCatalog.displayNameForCode(status.currentLanguageCode)}"
+                            status.isPaused -> "آماده‌سازی خودکار مدل‌های آفلاین متوقف شد"
+                            else -> "وضعیت دریافت نوبتی مدل‌های ترجمه آفلاین"
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "${status.completedCount} از ${status.totalCount} زبان اصلی",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (allDone) {
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            if (!allDone) {
+                if (status.isRunning && progress <= 0f) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            if (!status.lastError.isNullOrBlank()) {
+                Text(
+                    text = status.lastError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            if (!allDone) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (status.isRunning) {
+                        OutlinedButton(
+                            onClick = onPause,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("pause_prewarm_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Pause,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("توقف موقت")
+                        }
+                    } else {
+                        FilledTonalButton(
+                            onClick = onResume,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("resume_prewarm_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("ادامه دریافت خودکار")
+                        }
+                    }
+
+                    TextButton(
+                        onClick = onRetryClean,
+                        modifier = Modifier.testTag("retry_clean_prewarm_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("پاکسازی و تلاش مجدد", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun LanguagePackItemCard(
     pack: LanguagePackStatus,
     isOcrActive: Boolean,
@@ -746,7 +1114,13 @@ private fun LanguagePackItemCard(
                     Text(
                         text = buildString {
                             append("OCR: ")
-                            append(if (pack.isOcrInstalled) "نصب‌شده" else "${lang.ocrPackSizeMb} MB")
+                            append(
+                                when {
+                                    lang.isOcrBundled -> "آماده در برنامه"
+                                    pack.isOcrInstalled -> "نصب‌شده"
+                                    else -> "${lang.ocrPackSizeMb} MB"
+                                }
+                            )
                             append("  •  ترجمه: ")
                             append(
                                 when {
@@ -808,7 +1182,19 @@ private fun LanguagePackItemCard(
                             label = { Text("دانلود OCR") },
                             modifier = Modifier.testTag("download_ocr_${lang.mlKitCode}")
                         )
-                    } else if (!lang.isOcrBundled) {
+                    } else if (lang.isOcrBundled) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+                        ) {
+                            Text(
+                                text = "OCR داخلی آماده",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                            )
+                        }
+                    } else {
                         AssistChip(
                             onClick = onDeleteOcr,
                             leadingIcon = {

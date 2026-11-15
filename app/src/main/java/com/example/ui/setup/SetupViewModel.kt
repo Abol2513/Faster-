@@ -20,6 +20,8 @@ import com.example.data.translation.OfflineTranslationEngine
 import com.example.domain.model.CaptureSource
 import com.example.domain.model.LanguageCatalog
 import com.example.domain.model.LanguagePackStatus
+import com.example.domain.model.PrewarmStatus
+import com.example.domain.model.TranslationEngineMode
 import com.example.util.DeviceCompatibilityHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -40,6 +43,9 @@ data class SetupUiState(
     val activeOcrLanguages: Set<String> = setOf("fas", "eng"),
     val autoTranslateOnSelect: Boolean = true,
     val allowCellularDownloads: Boolean = true,
+    val translationEngineMode: TranslationEngineMode = TranslationEngineMode.SMART_HYBRID,
+    val geminiApiKey: String = "",
+    val prewarmStatus: PrewarmStatus = PrewarmStatus(),
     val languagePacks: List<LanguagePackStatus> = emptyList(),
     val isLoadingPacks: Boolean = true
 )
@@ -58,12 +64,18 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
 
     private val downloadingOcr = MutableStateFlow<Set<String>>(emptySet())
     private val downloadingTranslate = MutableStateFlow<Set<String>>(emptySet())
+    private var prewarmTriggeredOnce = false
 
     init {
         viewModelScope.launch {
             runCatching { ocrEngine.ensureBundledTessData() }
             refreshSystemStatus()
+            val allowCellular = prefsRepo.allowCellularDownloads.first()
             refreshLanguagePacks()
+            if (!prewarmTriggeredOnce && !OfflineTranslationEngine.prewarmStatus.value.isPaused) {
+                prewarmTriggeredOnce = true
+                translationEngine.startCorePrewarm(allowCellular)
+            }
         }
 
         viewModelScope.launch {
@@ -86,6 +98,27 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(allowCellularDownloads = allowCellular) }
             }
         }
+        viewModelScope.launch {
+            prefsRepo.translationEngineMode.collectLatest { mode ->
+                _uiState.update { it.copy(translationEngineMode = mode) }
+            }
+        }
+        viewModelScope.launch {
+            prefsRepo.geminiApiKey.collectLatest { key ->
+                _uiState.update { it.copy(geminiApiKey = key) }
+            }
+        }
+        viewModelScope.launch {
+            OfflineTranslationEngine.prewarmStatus.collectLatest { status ->
+                _uiState.update { it.copy(prewarmStatus = status) }
+                refreshLanguagePacks()
+            }
+        }
+        viewModelScope.launch {
+            OfflineTranslationEngine.activeDownloadingCode.collectLatest {
+                refreshLanguagePacks()
+            }
+        }
     }
 
     fun refreshSystemStatus() {
@@ -103,18 +136,20 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
 
             val ocrBusy = downloadingOcr.value
             val trBusy = downloadingTranslate.value
+            val activeGlobalCode = OfflineTranslationEngine.activeDownloadingCode.value
 
             val packs = LanguageCatalog.supportedLanguages.map { lang ->
                 val isOcrOk = lang.tessCode != null && lang.tessCode in installedOcr
                 val isBuiltInTr = lang.mlKitCode == "en"
                 val isTrOk = isBuiltInTr || lang.mlKitCode in downloadedTranslate
+                val isTrBusy = !isTrOk && (lang.mlKitCode in trBusy || lang.mlKitCode == activeGlobalCode)
                 LanguagePackStatus(
                     language = lang,
                     isOcrInstalled = isOcrOk,
                     isTranslateModelInstalled = isTrOk,
                     isTranslateBuiltIn = isBuiltInTr,
                     isDownloadingOcr = lang.tessCode != null && lang.tessCode in ocrBusy,
-                    isDownloadingTranslate = lang.mlKitCode in trBusy
+                    isDownloadingTranslate = isTrBusy
                 )
             }
             _uiState.update { it.copy(languagePacks = packs, isLoadingPacks = false) }
@@ -146,6 +181,55 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     fun setAllowCellularDownloads(allowed: Boolean) {
         viewModelScope.launch {
             prefsRepo.setAllowCellularDownloads(allowed)
+        }
+    }
+
+    fun setTranslationEngineMode(mode: TranslationEngineMode) {
+        viewModelScope.launch {
+            prefsRepo.setTranslationEngineMode(mode)
+        }
+    }
+
+    fun saveGeminiApiKey(apiKey: String) {
+        viewModelScope.launch {
+            val trimmed = apiKey.trim()
+            prefsRepo.setGeminiApiKey(trimmed)
+            _messages.tryEmit(
+                if (trimmed.isEmpty()) {
+                    "کلید Gemini API پاک شد؛ ترجمه آنلاین از سرویس رایگان پیش‌فرض استفاده می‌کند."
+                } else {
+                    "کلید Gemini API با موفقیت روی دستگاه ذخیره شد."
+                }
+            )
+        }
+    }
+
+    fun pausePrewarm() {
+        translationEngine.pausePrewarm()
+    }
+
+    fun resumePrewarm() {
+        val allowCellular = _uiState.value.allowCellularDownloads
+        if (!translationEngine.isNetworkAvailable()) {
+            _messages.tryEmit("برای دریافت مدل‌های آفلاین، اتصال اینترنت را بررسی کنید.")
+            return
+        }
+        if (!allowCellular && !translationEngine.isWifiConnected()) {
+            _messages.tryEmit("دانلود روی اینترنت همراه غیرفعال است؛ به وای‌فای متصل شوید یا گزینه اینترنت همراه را فعال کنید.")
+            return
+        }
+        translationEngine.startCorePrewarm(allowCellular)
+    }
+
+    fun retryCleanPrewarm() {
+        viewModelScope.launch {
+            val allowCellular = _uiState.value.allowCellularDownloads
+            if (!translationEngine.isNetworkAvailable()) {
+                _messages.tryEmit("برای پاکسازی و تلاش مجدد، اتصال اینترنت را برقرار کنید.")
+                return@launch
+            }
+            translationEngine.cleanStalledAndRetryPrewarm(allowCellular)
+            refreshLanguagePacks()
         }
     }
 

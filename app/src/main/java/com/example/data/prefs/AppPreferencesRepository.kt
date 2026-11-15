@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.domain.model.TranslationEngineMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -20,6 +21,8 @@ class AppPreferencesRepository(private val context: Context) {
         val ACTIVE_OCR_LANGUAGES = stringSetPreferencesKey("active_ocr_languages")
         val AUTO_TRANSLATE = booleanPreferencesKey("auto_translate_on_select")
         val ALLOW_CELLULAR_DOWNLOADS = booleanPreferencesKey("allow_cellular_downloads")
+        val TRANSLATION_ENGINE_MODE = stringPreferencesKey("translation_engine_mode")
+        val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
     }
 
     val targetLanguageCode: Flow<String> = context.dataStore.data.map { prefs ->
@@ -38,15 +41,17 @@ class AppPreferencesRepository(private val context: Context) {
         prefs[Keys.ALLOW_CELLULAR_DOWNLOADS] ?: true
     }
 
+    val translationEngineMode: Flow<TranslationEngineMode> = context.dataStore.data.map { prefs ->
+        TranslationEngineMode.fromKey(prefs[Keys.TRANSLATION_ENGINE_MODE])
+    }
+
+    val geminiApiKey: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[Keys.GEMINI_API_KEY] ?: ""
+    }
+
     suspend fun setTargetLanguage(code: String) {
         context.dataStore.edit { prefs ->
             prefs[Keys.TARGET_LANGUAGE] = code
-        }
-    }
-
-    suspend fun setActiveOcrLanguages(tessCodes: Set<String>) {
-        context.dataStore.edit { prefs ->
-            prefs[Keys.ACTIVE_OCR_LANGUAGES] = tessCodes.ifEmpty { setOf("fas", "eng") }
         }
     }
 
@@ -71,6 +76,18 @@ class AppPreferencesRepository(private val context: Context) {
     suspend fun setAllowCellularDownloads(allowed: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[Keys.ALLOW_CELLULAR_DOWNLOADS] = allowed
+        }
+    }
+
+    suspend fun setTranslationEngineMode(mode: TranslationEngineMode) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.TRANSLATION_ENGINE_MODE] = mode.key
+        }
+    }
+
+    suspend fun setGeminiApiKey(apiKey: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.GEMINI_API_KEY] = apiKey.trim()
         }
     }
 }

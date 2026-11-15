@@ -53,6 +53,7 @@ class OverlayActivity : ComponentActivity() {
                     onUpdateEditableText = viewModel::updateEditableText,
                     onSelectSourceLang = viewModel::setSourceLanguage,
                     onSelectTargetLang = viewModel::setTargetLanguage,
+                    onSelectTranslationMode = viewModel::setTranslationEngineMode,
                     onSwapLanguages = viewModel::swapLanguages,
                     onRetranslate = viewModel::retranslate,
                     onDownloadMissingModels = viewModel::downloadMissingModelsAndRetranslate,

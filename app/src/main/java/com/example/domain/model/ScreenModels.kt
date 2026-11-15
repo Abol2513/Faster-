@@ -38,6 +38,33 @@ enum class CaptureSource {
     ASSIST_TEXT_ONLY
 }
 
+enum class TranslationEngineMode(val key: String, val persianLabel: String) {
+    SMART_HYBRID("smart", "هوشمند (آنلاین + آفلاین)"),
+    ONLINE_ONLY("online", "فقط آنلاین"),
+    OFFLINE_ONLY("offline", "فقط آفلاین");
+
+    companion object {
+        fun fromKey(key: String?): TranslationEngineMode {
+            return entries.firstOrNull { it.key == key } ?: SMART_HYBRID
+        }
+    }
+}
+
+enum class UsedTranslationEngine(val badgeText: String) {
+    ONLINE_GEMINI("ترجمه آنلاین (Gemini)"),
+    ONLINE_FREE("ترجمه آنلاین"),
+    OFFLINE_MLKIT("ترجمه آفلاین")
+}
+
+data class PrewarmStatus(
+    val isRunning: Boolean = false,
+    val isPaused: Boolean = false,
+    val currentLanguageCode: String? = null,
+    val completedCount: Int = 0,
+    val totalCount: Int = LanguageCatalog.PREWARM_CORE_LANGUAGE_CODES.size,
+    val lastError: String? = null
+)
+
 data class SupportedLanguage(
     val mlKitCode: String,
     val tessCode: String?,
@@ -61,6 +88,10 @@ data class LanguagePackStatus(
 object LanguageCatalog {
     const val AUTO_DETECT_CODE = "auto"
 
+    val PREWARM_CORE_LANGUAGE_CODES: List<String> = listOf(
+        "fa", "fr", "es", "de", "ar", "tr", "ru", "it", "pt"
+    )
+
     val supportedLanguages: List<SupportedLanguage> = listOf(
         SupportedLanguage(
             mlKitCode = "fa",
@@ -83,40 +114,14 @@ object LanguageCatalog {
             isOcrBundled = true
         ),
         SupportedLanguage(
-            mlKitCode = "ar",
-            tessCode = "ara",
-            persianName = "عربی",
-            nativeName = "العربية",
-            isRtl = true,
-            ocrPackSizeMb = 1.4f,
-            translateModelSizeMb = 30
-        ),
-        SupportedLanguage(
-            mlKitCode = "tr",
-            tessCode = "tur",
-            persianName = "ترکی استانبولی",
-            nativeName = "Türkçe",
-            isRtl = false,
-            ocrPackSizeMb = 2.4f,
-            translateModelSizeMb = 30
-        ),
-        SupportedLanguage(
-            mlKitCode = "de",
-            tessCode = "deu",
-            persianName = "آلمانی",
-            nativeName = "Deutsch",
-            isRtl = false,
-            ocrPackSizeMb = 1.8f,
-            translateModelSizeMb = 30
-        ),
-        SupportedLanguage(
             mlKitCode = "fr",
             tessCode = "fra",
             persianName = "فرانسوی",
             nativeName = "Français",
             isRtl = false,
-            ocrPackSizeMb = 1.5f,
-            translateModelSizeMb = 30
+            ocrPackSizeMb = 1.1f,
+            translateModelSizeMb = 30,
+            isOcrBundled = true
         ),
         SupportedLanguage(
             mlKitCode = "es",
@@ -124,8 +129,39 @@ object LanguageCatalog {
             persianName = "اسپانیایی",
             nativeName = "Español",
             isRtl = false,
-            ocrPackSizeMb = 1.8f,
-            translateModelSizeMb = 30
+            ocrPackSizeMb = 2.2f,
+            translateModelSizeMb = 30,
+            isOcrBundled = true
+        ),
+        SupportedLanguage(
+            mlKitCode = "de",
+            tessCode = "deu",
+            persianName = "آلمانی",
+            nativeName = "Deutsch",
+            isRtl = false,
+            ocrPackSizeMb = 1.5f,
+            translateModelSizeMb = 30,
+            isOcrBundled = true
+        ),
+        SupportedLanguage(
+            mlKitCode = "ar",
+            tessCode = "ara",
+            persianName = "عربی",
+            nativeName = "العربية",
+            isRtl = true,
+            ocrPackSizeMb = 1.4f,
+            translateModelSizeMb = 30,
+            isOcrBundled = true
+        ),
+        SupportedLanguage(
+            mlKitCode = "tr",
+            tessCode = "tur",
+            persianName = "ترکی استانبولی",
+            nativeName = "Türkçe",
+            isRtl = false,
+            ocrPackSizeMb = 4.4f,
+            translateModelSizeMb = 30,
+            isOcrBundled = true
         ),
         SupportedLanguage(
             mlKitCode = "ru",
@@ -133,8 +169,9 @@ object LanguageCatalog {
             persianName = "روسی",
             nativeName = "Русский",
             isRtl = false,
-            ocrPackSizeMb = 2.8f,
-            translateModelSizeMb = 30
+            ocrPackSizeMb = 3.7f,
+            translateModelSizeMb = 30,
+            isOcrBundled = true
         ),
         SupportedLanguage(
             mlKitCode = "it",
@@ -142,8 +179,9 @@ object LanguageCatalog {
             persianName = "ایتالیایی",
             nativeName = "Italiano",
             isRtl = false,
-            ocrPackSizeMb = 1.6f,
-            translateModelSizeMb = 30
+            ocrPackSizeMb = 2.6f,
+            translateModelSizeMb = 30,
+            isOcrBundled = true
         ),
         SupportedLanguage(
             mlKitCode = "pt",
@@ -151,8 +189,9 @@ object LanguageCatalog {
             persianName = "پرتغالی",
             nativeName = "Português",
             isRtl = false,
-            ocrPackSizeMb = 1.5f,
-            translateModelSizeMb = 30
+            ocrPackSizeMb = 1.9f,
+            translateModelSizeMb = 30,
+            isOcrBundled = true
         ),
         SupportedLanguage(
             mlKitCode = "zh",
@@ -161,7 +200,8 @@ object LanguageCatalog {
             nativeName = "中文",
             isRtl = false,
             ocrPackSizeMb = 2.4f,
-            translateModelSizeMb = 35
+            translateModelSizeMb = 35,
+            isOcrBundled = false
         ),
         SupportedLanguage(
             mlKitCode = "ja",
@@ -170,7 +210,8 @@ object LanguageCatalog {
             nativeName = "日本語",
             isRtl = false,
             ocrPackSizeMb = 2.3f,
-            translateModelSizeMb = 35
+            translateModelSizeMb = 35,
+            isOcrBundled = false
         ),
         SupportedLanguage(
             mlKitCode = "ko",
@@ -179,7 +220,8 @@ object LanguageCatalog {
             nativeName = "한국어",
             isRtl = false,
             ocrPackSizeMb = 1.8f,
-            translateModelSizeMb = 32
+            translateModelSizeMb = 32,
+            isOcrBundled = false
         ),
         SupportedLanguage(
             mlKitCode = "hi",
@@ -188,24 +230,13 @@ object LanguageCatalog {
             nativeName = "हिन्दी",
             isRtl = false,
             ocrPackSizeMb = 1.4f,
-            translateModelSizeMb = 30
-        ),
-        SupportedLanguage(
-            mlKitCode = "ur",
-            tessCode = "urd",
-            persianName = "اردو",
-            nativeName = "اردو",
-            isRtl = true,
-            ocrPackSizeMb = 1.1f,
-            translateModelSizeMb = 30
+            translateModelSizeMb = 30,
+            isOcrBundled = false
         )
     )
 
     fun findByMlKitCode(code: String): SupportedLanguage? =
         supportedLanguages.firstOrNull { it.mlKitCode.equals(code, ignoreCase = true) }
-
-    fun findByTessCode(tessCode: String): SupportedLanguage? =
-        supportedLanguages.firstOrNull { it.tessCode.equals(tessCode, ignoreCase = true) }
 
     fun displayNameForCode(code: String): String {
         if (code == AUTO_DETECT_CODE) return "تشخیص خودکار"

@@ -18,14 +18,19 @@ import com.example.domain.model.OcrEngineSource
 import com.example.domain.model.OcrLine
 import com.example.domain.model.OcrResult
 import com.example.domain.model.OcrWord
+import com.example.domain.model.TranslationEngineMode
+import com.example.domain.model.UsedTranslationEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlin.math.max
 import kotlin.math.min
 
@@ -43,6 +48,7 @@ sealed interface TranslationStage {
     data class Success(
         val translatedText: String,
         val detectedSourceCode: String,
+        val usedEngine: UsedTranslationEngine,
         val wasSameLanguage: Boolean
     ) : TranslationStage
     data class MissingModel(
@@ -64,6 +70,8 @@ data class OverlayUiState(
     val sourceLangCode: String = LanguageCatalog.AUTO_DETECT_CODE,
     val detectedSourceCode: String? = null,
     val targetLangCode: String = "fa",
+    val translationEngineMode: TranslationEngineMode = TranslationEngineMode.SMART_HYBRID,
+    val isTranslating: Boolean = false,
     val translationStage: TranslationStage = TranslationStage.Idle,
     val isSheetExpanded: Boolean = false
 )
@@ -72,6 +80,7 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
 
     companion object {
         private const val TAG = "OverlayViewModel"
+        private const val TRANSLATION_TIMEOUT_MS = 15_000L
     }
 
     private val prefsRepo = AppPreferencesRepository(application)
@@ -86,13 +95,32 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
     private var translateJob: Job? = null
     private var autoTranslateEnabled = true
     private var allowCellularDownloads = true
+    private var geminiApiKey: String = ""
 
     init {
         viewModelScope.launch {
             val defaultTarget = prefsRepo.targetLanguageCode.first()
+            val savedMode = prefsRepo.translationEngineMode.first()
+            geminiApiKey = prefsRepo.geminiApiKey.first()
             autoTranslateEnabled = prefsRepo.autoTranslateOnSelect.first()
             allowCellularDownloads = prefsRepo.allowCellularDownloads.first()
-            _uiState.update { it.copy(targetLangCode = defaultTarget) }
+            _uiState.update {
+                it.copy(
+                    targetLangCode = defaultTarget,
+                    translationEngineMode = savedMode
+                )
+            }
+
+            launch {
+                prefsRepo.translationEngineMode.collectLatest { mode ->
+                    _uiState.update { it.copy(translationEngineMode = mode) }
+                }
+            }
+            launch {
+                prefsRepo.geminiApiKey.collectLatest { key ->
+                    geminiApiKey = key
+                }
+            }
 
             OverlaySessionStore.payload.collect { payload ->
                 if (payload != null && payload.id != _uiState.value.sessionId) {
@@ -305,7 +333,7 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
                             )
                         }
                         if (autoTranslateEnabled) {
-                            runTranslation(refinedText, autoDownloadIfOnline = true)
+                            runTranslation(refinedText)
                         }
                     } else {
                         _uiState.update { it.copy(isRefiningCroppedOcr = false) }
@@ -335,6 +363,7 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
                 selectedLineIndices = emptySet(),
                 editableSourceText = "",
                 isRefiningCroppedOcr = false,
+                isTranslating = false,
                 translationStage = TranslationStage.Idle,
                 isSheetExpanded = false
             )
@@ -353,6 +382,12 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
     fun setTargetLanguage(code: String) {
         _uiState.update { it.copy(targetLangCode = code) }
         viewModelScope.launch { prefsRepo.setTargetLanguage(code) }
+        retranslate()
+    }
+
+    fun setTranslationEngineMode(mode: TranslationEngineMode) {
+        _uiState.update { it.copy(translationEngineMode = mode) }
+        viewModelScope.launch { prefsRepo.setTranslationEngineMode(mode) }
         retranslate()
     }
 
@@ -381,16 +416,26 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
     fun retranslate() {
         val text = _uiState.value.editableSourceText.trim()
         if (text.isEmpty()) {
-            _uiState.update { it.copy(translationStage = TranslationStage.Idle) }
+            _uiState.update {
+                it.copy(
+                    isTranslating = false,
+                    translationStage = TranslationStage.Idle
+                )
+            }
             return
         }
-        runTranslation(text, autoDownloadIfOnline = true)
+        runTranslation(text)
     }
 
     fun downloadMissingModelsAndRetranslate(missingCodes: List<String>) {
         translateJob?.cancel()
         translateJob = viewModelScope.launch {
-            _uiState.update { it.copy(translationStage = TranslationStage.DownloadingModels) }
+            _uiState.update {
+                it.copy(
+                    isTranslating = true,
+                    translationStage = TranslationStage.DownloadingModels
+                )
+            }
             try {
                 allowCellularDownloads = prefsRepo.allowCellularDownloads.first()
                 for (code in missingCodes) {
@@ -401,7 +446,17 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
                 }
                 val text = _uiState.value.editableSourceText.trim()
                 if (text.isNotEmpty()) {
-                    runTranslationInternal(text, autoDownloadIfOnline = false)
+                    runTranslationInternal(text)
+                } else {
+                    _uiState.update { it.copy(translationStage = TranslationStage.Idle) }
+                }
+            } catch (e: TimeoutCancellationException) {
+                _uiState.update {
+                    it.copy(
+                        translationStage = TranslationStage.Error(
+                            e.localizedMessage ?: "زمان دانلود مدل به پایان رسید. دوباره تلاش کنید."
+                        )
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -413,6 +468,8 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
                         )
                     )
                 }
+            } finally {
+                _uiState.update { it.copy(isTranslating = false) }
             }
         }
     }
@@ -453,36 +510,59 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
         }
 
         if (autoTranslateEnabled && formattedText.isNotBlank()) {
-            runTranslation(formattedText, autoDownloadIfOnline = true)
+            runTranslation(formattedText)
         }
     }
 
-    private fun runTranslation(text: String, autoDownloadIfOnline: Boolean) {
+    private fun runTranslation(text: String) {
         translateJob?.cancel()
         translateJob = viewModelScope.launch {
-            runTranslationInternal(text, autoDownloadIfOnline)
+            runTranslationInternal(text)
         }
     }
 
-    private suspend fun runTranslationInternal(text: String, autoDownloadIfOnline: Boolean) {
+    private suspend fun runTranslationInternal(text: String) {
         val state = _uiState.value
         allowCellularDownloads = prefsRepo.allowCellularDownloads.first()
-        _uiState.update { it.copy(translationStage = TranslationStage.Translating) }
-        try {
-            val outcome = translationEngine.translate(
-                text = text,
-                sourceCode = state.sourceLangCode,
-                targetCode = state.targetLangCode,
-                autoDownloadIfOnline = autoDownloadIfOnline,
-                allowCellular = allowCellularDownloads
+        val currentMode = prefsRepo.translationEngineMode.first()
+        val currentGeminiKey = prefsRepo.geminiApiKey.first()
+        geminiApiKey = currentGeminiKey
+
+        _uiState.update {
+            it.copy(
+                isTranslating = true,
+                translationEngineMode = currentMode,
+                translationStage = TranslationStage.Translating
             )
+        }
+        try {
+            val outcome = withTimeout(TRANSLATION_TIMEOUT_MS) {
+                translationEngine.translateWithMode(
+                    text = text,
+                    sourceCode = state.sourceLangCode,
+                    targetCode = state.targetLangCode,
+                    mode = currentMode,
+                    geminiApiKey = currentGeminiKey,
+                    allowCellular = allowCellularDownloads
+                )
+            }
             _uiState.update {
                 it.copy(
                     detectedSourceCode = outcome.detectedSourceCode,
                     translationStage = TranslationStage.Success(
                         translatedText = outcome.translatedText,
                         detectedSourceCode = outcome.detectedSourceCode,
+                        usedEngine = outcome.usedEngine,
                         wasSameLanguage = outcome.wasSameLanguage
+                    )
+                )
+            }
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Translation timed out after 15s", e)
+            _uiState.update {
+                it.copy(
+                    translationStage = TranslationStage.Error(
+                        "زمان ترجمه به پایان رسید (۱۵ ثانیه). وضعیت شبکه یا مدل آفلاین را بررسی کنید و دوباره تلاش کنید."
                     )
                 )
             }
@@ -504,6 +584,18 @@ class OverlayViewModel(application: Application) : AndroidViewModel(application)
                     translationStage = TranslationStage.Error(
                         e.localizedMessage ?: "خطا در ترجمه متن."
                     )
+                )
+            }
+        } finally {
+            _uiState.update { current ->
+                val resolvedStage = if (current.translationStage is TranslationStage.Translating) {
+                    TranslationStage.Error("فرآیند ترجمه متوقف شد؛ دوباره تلاش کنید.")
+                } else {
+                    current.translationStage
+                }
+                current.copy(
+                    isTranslating = false,
+                    translationStage = resolvedStage
                 )
             }
         }

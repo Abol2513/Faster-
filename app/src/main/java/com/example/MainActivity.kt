@@ -101,6 +101,11 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                     onSelectTargetLanguage = viewModel::setTargetLanguage,
+                    onSelectTranslationMode = viewModel::setTranslationEngineMode,
+                    onSaveGeminiApiKey = viewModel::saveGeminiApiKey,
+                    onPausePrewarm = viewModel::pausePrewarm,
+                    onResumePrewarm = viewModel::resumePrewarm,
+                    onRetryCleanPrewarm = viewModel::retryCleanPrewarm,
                     onToggleOcrLanguage = viewModel::toggleOcrLanguage,
                     onToggleAutoTranslate = viewModel::setAutoTranslate,
                     onToggleAllowCellular = viewModel::setAllowCellularDownloads,

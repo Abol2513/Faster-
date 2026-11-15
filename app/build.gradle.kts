@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.net.URI
 
 plugins {
   alias(libs.plugins.android.application)
@@ -124,7 +125,7 @@ dependencies {
   implementation(libs.mlkit.language.id)
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
-  // implementation(libs.okhttp)
+  implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
@@ -142,4 +143,40 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   // "ksp"(libs.androidx.room.compiler)
   // "ksp"(libs.moshi.kotlin.codegen)
+}
+
+val tessdataAssetDir = layout.projectDirectory.dir("src/main/assets/tessdata")
+
+val downloadBundledTessdata by tasks.registering {
+  val outputDir = tessdataAssetDir
+  val langs = listOf("eng", "fas", "fra", "spa", "deu", "ara", "tur", "rus", "ita", "por")
+  doLast {
+    val dir = outputDir.asFile
+    if (!dir.exists()) dir.mkdirs()
+    for (lang in langs) {
+      val target = File(dir, "$lang.traineddata")
+      if (!target.exists() || target.length() <= 0L) {
+        val temp = File(dir, "$lang.traineddata.tmp")
+        val url = URI("https://github.com/tesseract-ocr/tessdata_fast/raw/main/$lang.traineddata").toURL()
+        url.openStream().use { input ->
+          temp.outputStream().use { output ->
+            input.copyTo(output)
+          }
+        }
+        if (temp.length() <= 0L) {
+          temp.delete()
+          throw GradleException("Downloaded empty tessdata file for $lang")
+        }
+        if (target.exists()) target.delete()
+        if (!temp.renameTo(target)) {
+          temp.copyTo(target, overwrite = true)
+          temp.delete()
+        }
+      }
+    }
+  }
+}
+
+tasks.named("preBuild") {
+  dependsOn(downloadBundledTessdata)
 }

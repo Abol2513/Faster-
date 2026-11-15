@@ -48,10 +48,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Screenshot
 import androidx.compose.material.icons.filled.SelectAll
@@ -61,6 +63,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
@@ -105,6 +108,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.model.LanguageCatalog
+import com.example.domain.model.TranslationEngineMode
 import kotlinx.coroutines.delay
 import kotlin.math.min
 
@@ -117,6 +121,7 @@ fun CircleOverlayScreen(
     onUpdateEditableText: (String) -> Unit,
     onSelectSourceLang: (String) -> Unit,
     onSelectTargetLang: (String) -> Unit,
+    onSelectTranslationMode: (TranslationEngineMode) -> Unit,
     onSwapLanguages: () -> Unit,
     onRetranslate: () -> Unit,
     onDownloadMissingModels: (List<String>) -> Unit,
@@ -183,7 +188,7 @@ fun CircleOverlayScreen(
                 .windowInsetsPadding(
                     WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
                 )
-                .padding(top = 64.dp)
+                .padding(top = 74.dp)
         ) {
             Surface(
                 shape = CircleShape,
@@ -271,6 +276,7 @@ fun CircleOverlayScreen(
                 onUpdateEditableText = onUpdateEditableText,
                 onSelectSourceLang = onSelectSourceLang,
                 onSelectTargetLang = onSelectTargetLang,
+                onSelectTranslationMode = onSelectTranslationMode,
                 onSwapLanguages = onSwapLanguages,
                 onRetranslate = onRetranslate,
                 onDownloadMissingModels = onDownloadMissingModels,
@@ -482,7 +488,7 @@ private fun TopOverlayControls(
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         FilledTonalIconButton(
             onClick = onClose,
@@ -499,47 +505,51 @@ private fun TopOverlayControls(
             )
         }
 
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.90f),
-            tonalElevation = 4.dp,
-            modifier = Modifier
-                .weight(1f, fill = false)
-                .padding(horizontal = 8.dp)
+        Box(
+            modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.Center
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                tonalElevation = 4.dp
             ) {
-                if (ocrStage is OcrStage.Scanning || isRefining) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp
-                    )
-                    Text(
-                        text = if (isRefining) {
-                            "بازخوانی دقیق ناحیه دایره…"
-                        } else {
-                            "در حال تشخیص متن صفحه…"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.AutoAwesome,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = stringResource(R.string.overlay_hint_circle),
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (ocrStage is OcrStage.Scanning || isRefining) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = if (isRefining) {
+                                "بازخوانی ناحیه…"
+                            } else {
+                                "تشخیص متن…"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.AutoAwesome,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.overlay_hint_circle),
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
                 }
             }
         }
@@ -588,6 +598,7 @@ private fun TranslationBottomSheet(
     onUpdateEditableText: (String) -> Unit,
     onSelectSourceLang: (String) -> Unit,
     onSelectTargetLang: (String) -> Unit,
+    onSelectTranslationMode: (TranslationEngineMode) -> Unit,
     onSwapLanguages: () -> Unit,
     onRetranslate: () -> Unit,
     onDownloadMissingModels: (List<String>) -> Unit,
@@ -697,6 +708,11 @@ private fun TranslationBottomSheet(
                     onSwapLanguages = onSwapLanguages
                 )
 
+                OverlayModeSelectorRow(
+                    selectedMode = state.translationEngineMode,
+                    onSelectMode = onSelectTranslationMode
+                )
+
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                     val isWide = maxWidth >= 540.dp
                     if (isWide) {
@@ -718,6 +734,7 @@ private fun TranslationBottomSheet(
                             )
                             TranslatedOutputCard(
                                 translationStage = state.translationStage,
+                                translationEngineMode = state.translationEngineMode,
                                 targetLangCode = state.targetLangCode,
                                 onDownloadMissingModels = onDownloadMissingModels,
                                 onRetry = onRetranslate,
@@ -743,6 +760,7 @@ private fun TranslationBottomSheet(
                             )
                             TranslatedOutputCard(
                                 translationStage = state.translationStage,
+                                translationEngineMode = state.translationEngineMode,
                                 targetLangCode = state.targetLangCode,
                                 onDownloadMissingModels = onDownloadMissingModels,
                                 onRetry = onRetranslate,
@@ -1087,8 +1105,55 @@ private fun OriginalEditableCard(
 }
 
 @Composable
+private fun OverlayModeSelectorRow(
+    selectedMode: TranslationEngineMode,
+    onSelectMode: (TranslationEngineMode) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TranslationEngineMode.entries.forEach { mode ->
+            val shortLabel = when (mode) {
+                TranslationEngineMode.SMART_HYBRID -> "هوشمند"
+                TranslationEngineMode.ONLINE_ONLY -> "آنلاین"
+                TranslationEngineMode.OFFLINE_ONLY -> "آفلاین"
+            }
+            val icon = when (mode) {
+                TranslationEngineMode.SMART_HYBRID -> Icons.Filled.AutoAwesome
+                TranslationEngineMode.ONLINE_ONLY -> Icons.Filled.Cloud
+                TranslationEngineMode.OFFLINE_ONLY -> Icons.Filled.OfflinePin
+            }
+            FilterChip(
+                selected = selectedMode == mode,
+                onClick = { onSelectMode(mode) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                },
+                label = {
+                    Text(
+                        text = shortLabel,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("overlay_mode_chip_${mode.key}")
+            )
+        }
+    }
+}
+
+@Composable
 private fun TranslatedOutputCard(
     translationStage: TranslationStage,
+    translationEngineMode: TranslationEngineMode,
     targetLangCode: String,
     onDownloadMissingModels: (List<String>) -> Unit,
     onRetry: () -> Unit,
@@ -1105,11 +1170,32 @@ private fun TranslatedOutputCard(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = "ترجمه (${LanguageCatalog.displayNameForCode(targetLangCode)})",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "ترجمه (${LanguageCatalog.displayNameForCode(targetLangCode)})",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                if (translationStage is TranslationStage.Success) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.secondaryContainer
+                    ) {
+                        Text(
+                            text = translationStage.usedEngine.badgeText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                                .testTag("translation_engine_badge")
+                        )
+                    }
+                }
+            }
 
             when (translationStage) {
                 is TranslationStage.Idle -> {
@@ -1122,7 +1208,11 @@ private fun TranslatedOutputCard(
                 is TranslationStage.Translating -> {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Text(
-                        text = "در حال ترجمه آفلاین…",
+                        text = when (translationEngineMode) {
+                            TranslationEngineMode.SMART_HYBRID -> "در حال ترجمه هوشمند…"
+                            TranslationEngineMode.ONLINE_ONLY -> "در حال ترجمه آنلاین…"
+                            TranslationEngineMode.OFFLINE_ONLY -> "در حال ترجمه آفلاین…"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

@@ -32,7 +32,9 @@ class TesseractOcrEngine(private val context: Context) {
         private const val TAG = "TesseractOcrEngine"
         private const val TESSDATA_URL_PREFIX =
             "https://github.com/tesseract-ocr/tessdata_fast/raw/main/"
-        private val BUNDLED_LANGUAGES = listOf("fas", "eng")
+        private val BUNDLED_LANGUAGES = listOf(
+            "eng", "fas", "fra", "spa", "deu", "ara", "tur", "rus", "ita", "por"
+        )
         private const val MAX_OCR_DIMENSION = 1920
         private const val MIN_CROP_OCR_DIMENSION = 420
         private const val MAX_CROP_OCR_DIMENSION = 1440
@@ -59,17 +61,26 @@ class TesseractOcrEngine(private val context: Context) {
                 val outFile = File(tessDataDir, fileName)
                 if (!outFile.exists() || outFile.length() < 10_000L) {
                     val tempFile = File(tessDataDir, "$fileName.tmp")
-                    context.assets.open("tessdata/$fileName").use { input ->
-                        FileOutputStream(tempFile).use { output ->
-                            input.copyTo(output)
+                    runCatching {
+                        context.assets.open("tessdata/$fileName").use { input ->
+                            FileOutputStream(tempFile).use { output ->
+                                input.copyTo(output)
+                            }
                         }
-                    }
-                    if (outFile.exists()) outFile.delete()
-                    if (!tempFile.renameTo(outFile)) {
-                        tempFile.copyTo(outFile, overwrite = true)
+                        if (tempFile.length() >= 10_000L) {
+                            if (outFile.exists()) outFile.delete()
+                            if (!tempFile.renameTo(outFile)) {
+                                tempFile.copyTo(outFile, overwrite = true)
+                                tempFile.delete()
+                            }
+                            Log.d(TAG, "Copied bundled $fileName (${outFile.length()} bytes)")
+                        } else {
+                            tempFile.delete()
+                        }
+                    }.onFailure { e ->
                         tempFile.delete()
+                        Log.w(TAG, "Failed to copy bundled asset $fileName", e)
                     }
-                    Log.d(TAG, "Copied bundled $fileName (${outFile.length()} bytes)")
                 }
             }
         }
@@ -137,10 +148,6 @@ class TesseractOcrEngine(private val context: Context) {
         if (file.exists()) file.delete() else false
     }
 
-    /**
-     * Full-screen initial OCR pass returning normalized word and line bounding boxes.
-     * Protected by single-threaded dispatcher and Mutex so rapid runs never crash native TessBaseAPI.
-     */
     suspend fun recognize(
         sourceBitmap: Bitmap,
         requestedTessCodes: Set<String>
@@ -306,10 +313,6 @@ class TesseractOcrEngine(private val context: Context) {
         }
     }
 
-    /**
-     * High-resolution cropped OCR pass on the user's drawn circle/box region.
-     * Applies smart padding, ARGB_8888 conversion, and safe upscaling for small text.
-     */
     suspend fun recognizeCroppedRegion(
         sourceBitmap: Bitmap,
         normalizedBounds: RectF,
