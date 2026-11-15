@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">دایره ترجمه</string>
+    <string name="voice_service_label">دستیار دایره ترجمه</string>
+    <string name="tile_label">ترجمه صفحه</string>
+    <string name="notification_channel_capture_name">ثبت لحظه‌ای تصویر صفحه</string>
+    <string name="notification_channel_capture_desc">اعلان کوتاه هنگام ثبت تصویر صفحه برای تشخیص و ترجمه متن</string>
+    <string name="notification_capture_title">در حال ثبت تصویر صفحه…</string>
+    <string name="notification_capture_text">بلافاصله پس از ثبت تصویر متوقف می‌شود</string>
+
+    <string name="assistant_status_active">دستیار پیش‌فرض فعال است</string>
+    <string name="assistant_status_inactive">نیاز به فعال‌سازی دستیار پیش‌فرض</string>
+    <string name="assistant_set_default_btn">تنظیم به‌عنوان دستیار پیش‌فرض</string>
+    <string name="assistant_open_settings_btn">باز کردن تنظیمات دستیار</string>
+    <string name="quick_tile_add_btn">افزودن به تنظیمات سریع</string>
+    <string name="test_capture_btn">ثبت فوری صفحه (آزمایشی)</string>
+    <string name="test_photo_btn">انتخاب تصویر از گالری</string>
+
+    <string name="overlay_title">دایره ترجمه</string>
+    <string name="overlay_hint_circle">روی متن دایره بکشید یا لمس کنید</string>
+    <string name="overlay_select_all">انتخاب کل متن</string>
+    <string name="overlay_clear_selection">پاک کردن</string>
+    <string name="overlay_close">بستن</string>
+    <string name="overlay_copy_original">کپی متن اصلی</string>
+    <string name="overlay_copy_translation">کپی ترجمه</string>
+    <string name="overlay_copy_both">کپی هر دو</string>
+    <string name="overlay_retranslate">ترجمه مجدد</string>
+    <string name="overlay_copied_toast">در حافظه کلیپ‌بورد کپی شد</string>
+    <string name="overlay_protected_screen">تصویر دریافت نشد؛ ممکن است صفحه محافظت‌شده باشد یا دسترسی دستیار محدود باشد.</string>
+    <string name="overlay_capture_fallback_btn">دریافت تصویر با MediaProjection</string>
+</resources>

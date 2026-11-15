@@ -1,0 +1,6 @@
+{
+  "name": "دایره ترجمه",
+  "description": "دستیار ترجمه و تشخیص متن آفلاین روی صفحه با فعال‌سازی از طریق نگهداشتن دکمه Home و کاشی تنظیمات سریع",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
